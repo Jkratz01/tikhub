@@ -10,6 +10,8 @@ type RunResult = {
   headers: Record<string, string>;
 } | null;
 
+const RESPONSE_PREVIEW_LINES = 80;
+
 const DEFAULT_HIDDEN_TAGS = new Set<string>([
   "Bilibili-App-API",
   "Bilibili-Web-API",
@@ -65,6 +67,27 @@ function prettyJson(value: unknown): string {
   }
 }
 
+function minifyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "{}";
+  }
+}
+
+function tryParseJson(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const likelyJson =
+    trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith('"');
+  if (!likelyJson) return null;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const [docMeta, setDocMeta] = useState({
     title: "TikHub API Docs",
@@ -80,7 +103,6 @@ export default function App() {
   const [selectedTag, setSelectedTag] = useState<string>("All");
   const [showAppFilters, setShowAppFilters] = useState(true);
   const [showTagFilters, setShowTagFilters] = useState(true);
-  const [showHiddenTags, setShowHiddenTags] = useState(false);
   const [selectedOperationId, setSelectedOperationId] = useState<string>("");
   const [language, setLanguage] = useState<SnippetLanguage>("python");
   const [globalApiKey, setGlobalApiKey] = useState("");
@@ -94,6 +116,8 @@ export default function App() {
   const [runLoading, setRunLoading] = useState(false);
   const [runError, setRunError] = useState("");
   const [runResult, setRunResult] = useState<RunResult>(null);
+  const [responseView, setResponseView] = useState<"pretty" | "shorten" | "raw">("pretty");
+  const [responseExpanded, setResponseExpanded] = useState(false);
   const shouldUseProxy = useMemo(() => {
     if (typeof window === "undefined") return false;
     const host = window.location.hostname;
@@ -142,10 +166,8 @@ export default function App() {
   }, [selectedApp, allOperations]);
 
   const visibleAppOperations = useMemo(() => {
-    return showHiddenTags
-      ? appFilteredOperations
-      : appFilteredOperations.filter((op) => !DEFAULT_HIDDEN_TAGS.has(op.tag));
-  }, [appFilteredOperations, showHiddenTags]);
+    return appFilteredOperations.filter((op) => !DEFAULT_HIDDEN_TAGS.has(op.tag));
+  }, [appFilteredOperations]);
 
   const tags = useMemo(() => {
     const counts = visibleAppOperations.reduce<Record<string, number>>((acc, op) => {
@@ -198,6 +220,8 @@ export default function App() {
     setBodyText(selectedOperation.requestBodyTemplate ?? "");
     setRunResult(null);
     setRunError("");
+    setResponseView("pretty");
+    setResponseExpanded(false);
   }, [selectedOperation]);
 
   const endpointApiKey = selectedOperation ? perEndpointApiKey[selectedOperation.id] ?? "" : "";
@@ -232,11 +256,43 @@ export default function App() {
     return buildUrl(selectedOperation, baseUrl, pathValues, queryValues);
   }, [selectedOperation, baseUrl, pathValues, queryValues]);
 
+  const parsedResponseBody = useMemo(() => {
+    if (!runResult?.body) return null;
+    return tryParseJson(runResult.body);
+  }, [runResult?.body]);
+
+  const hasJsonResponse = parsedResponseBody !== null;
+  const prettyResponseBody = useMemo(() => {
+    if (!runResult) return "";
+    if (!hasJsonResponse) return runResult.body;
+    return prettyJson(parsedResponseBody);
+  }, [runResult, hasJsonResponse, parsedResponseBody]);
+
+  const shortenedResponseBody = useMemo(() => {
+    if (!runResult || !hasJsonResponse) return runResult?.body ?? "";
+    return minifyJson(parsedResponseBody);
+  }, [runResult, hasJsonResponse, parsedResponseBody]);
+
+  const responseDisplayBody =
+    !runResult
+      ? ""
+      : responseView === "pretty" && hasJsonResponse
+        ? prettyResponseBody
+        : responseView === "shorten" && hasJsonResponse
+          ? shortenedResponseBody
+          : runResult.body;
+  const responseBodyLines = responseDisplayBody ? responseDisplayBody.split("\n").length : 0;
+  const shouldTruncateResponse = !responseExpanded && responseBodyLines > RESPONSE_PREVIEW_LINES;
+  const responsePreviewBody = shouldTruncateResponse
+    ? `${responseDisplayBody.split("\n").slice(0, RESPONSE_PREVIEW_LINES).join("\n")}\n\n... (${responseBodyLines - RESPONSE_PREVIEW_LINES} more lines)`
+    : responseDisplayBody;
+
   async function runRequest() {
     if (!selectedOperation) return;
     setRunError("");
     setRunLoading(true);
     setRunResult(null);
+    setResponseExpanded(false);
 
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 45000);
@@ -309,6 +365,7 @@ export default function App() {
         body: responseText,
         headers: responseHeaders
       });
+      setResponseView("pretty");
     } catch {
       setRunError(
         "Request failed. Check your API key, endpoint parameters, CORS policy, and network connectivity."
@@ -398,14 +455,9 @@ export default function App() {
 
           <div className="filter-row">
             <div className="muted tiny">Tag Filter</div>
-            <div className="filter-actions">
-              <button className="toggle-btn" onClick={() => setShowHiddenTags((prev) => !prev)}>
-                {showHiddenTags ? "Hide Hidden Tags" : "Show Hidden Tags"}
-              </button>
-              <button className="toggle-btn" onClick={() => setShowTagFilters((prev) => !prev)}>
-                {showTagFilters ? "Hide" : "Show"}
-              </button>
-            </div>
+            <button className="toggle-btn" onClick={() => setShowTagFilters((prev) => !prev)}>
+              {showTagFilters ? "Hide" : "Show"}
+            </button>
           </div>
           {showTagFilters && (
             <div className="tags">
@@ -598,6 +650,51 @@ export default function App() {
                   <p>
                     Status <strong>{runResult.status}</strong> • {runResult.elapsedMs} ms
                   </p>
+                  <div className="response-toolbar">
+                    <div className="response-toolbar-left">
+                      <button
+                        className={responseView === "pretty" ? "toggle-btn active-toggle" : "toggle-btn"}
+                        onClick={() => setResponseView("pretty")}
+                        disabled={!hasJsonResponse}
+                        title={hasJsonResponse ? "Formatted JSON" : "Not valid JSON"}
+                      >
+                        Pretty
+                      </button>
+                      <button
+                        className={responseView === "shorten" ? "toggle-btn active-toggle" : "toggle-btn"}
+                        onClick={() => setResponseView("shorten")}
+                        disabled={!hasJsonResponse}
+                        title={hasJsonResponse ? "Minified JSON" : "Not valid JSON"}
+                      >
+                        Shorten
+                      </button>
+                      <button
+                        className={responseView === "raw" ? "toggle-btn active-toggle" : "toggle-btn"}
+                        onClick={() => setResponseView("raw")}
+                      >
+                        Raw
+                      </button>
+                      {responseBodyLines > RESPONSE_PREVIEW_LINES && (
+                        <button className="toggle-btn" onClick={() => setResponseExpanded((prev) => !prev)}>
+                          {responseExpanded ? "Collapse" : "Expand"}
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      className="toggle-btn"
+                      onClick={() =>
+                        navigator.clipboard.writeText(
+                          responseView === "pretty" && hasJsonResponse
+                            ? prettyResponseBody
+                            : responseView === "shorten" && hasJsonResponse
+                              ? shortenedResponseBody
+                              : runResult.body || ""
+                        )
+                      }
+                    >
+                      Copy
+                    </button>
+                  </div>
                   <div className="status-list">
                     {selectedOperation.responseCodes.slice(0, 4).map((code) => (
                       <span key={code} className={runResult.status.toString() === code ? "status-pill active" : "status-pill"}>
@@ -607,9 +704,19 @@ export default function App() {
                   </div>
                   <details>
                     <summary>Response headers</summary>
-                    <pre>{prettyJson(runResult.headers)}</pre>
+                    <pre className="response-content">{prettyJson(runResult.headers)}</pre>
                   </details>
-                  <pre>{runResult.body || "(empty response body)"}</pre>
+                  <p className="muted tiny">
+                    {responseBodyLines} line{responseBodyLines === 1 ? "" : "s"} •{" "}
+                    {responseView === "pretty" && hasJsonResponse
+                      ? "formatted"
+                      : responseView === "shorten" && hasJsonResponse
+                        ? "minified"
+                        : "raw"}
+                  </p>
+                  <div className="response-content-wrap">
+                    <pre className="response-content">{responsePreviewBody || "(empty response body)"}</pre>
+                  </div>
                 </div>
               )}
             </div>
