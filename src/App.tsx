@@ -94,6 +94,11 @@ export default function App() {
   const [runLoading, setRunLoading] = useState(false);
   const [runError, setRunError] = useState("");
   const [runResult, setRunResult] = useState<RunResult>(null);
+  const shouldUseProxy = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const host = window.location.hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -263,19 +268,33 @@ export default function App() {
         .join("; ");
       if (cookieHeader) headers.Cookie = cookieHeader;
 
+      const method = selectedOperation.method.toUpperCase();
       const body =
         selectedOperation.requestBodyType && bodyText.trim()
           ? selectedOperation.requestBodyType.includes("json")
             ? bodyText
             : bodyText
           : undefined;
-
-      const response = await fetch(url, {
-        method: selectedOperation.method.toUpperCase(),
-        headers,
-        body,
-        signal: controller.signal
-      });
+      const response = shouldUseProxy
+        ? await fetch("/api/proxy", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              url,
+              method,
+              headers,
+              body: body ?? null
+            }),
+            signal: controller.signal
+          })
+        : await fetch(url, {
+            method,
+            headers,
+            body,
+            signal: controller.signal
+          });
 
       const elapsedMs = Math.round(performance.now() - start);
       const responseText = await response.text();
@@ -321,7 +340,7 @@ export default function App() {
             Version {docMeta.version} • {allOperations.length} endpoints • interactive docs and tester
           </p>
         </div>
-        <div className="top-controls">
+        <form className="top-controls" onSubmit={(event) => event.preventDefault()}>
           <label>
             Base URL
             <select value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)}>
@@ -341,7 +360,7 @@ export default function App() {
               placeholder="Bearer token for all endpoints"
             />
           </label>
-        </div>
+        </form>
       </header>
 
       <div className="layout">
@@ -447,20 +466,22 @@ export default function App() {
 
           <div className="card">
             <h3>Request Setup</h3>
-            <label>
-              Endpoint API Key Override (optional)
-              <input
-                type="password"
-                value={endpointApiKey}
-                onChange={(event) =>
-                  setPerEndpointApiKey((prev) => ({
-                    ...prev,
-                    [selectedOperation.id]: event.target.value
-                  }))
-                }
-                placeholder="Overrides global key for this endpoint only"
-              />
-            </label>
+            <form onSubmit={(event) => event.preventDefault()}>
+              <label>
+                Endpoint API Key Override (optional)
+                <input
+                  type="password"
+                  value={endpointApiKey}
+                  onChange={(event) =>
+                    setPerEndpointApiKey((prev) => ({
+                      ...prev,
+                      [selectedOperation.id]: event.target.value
+                    }))
+                  }
+                  placeholder="Overrides global key for this endpoint only"
+                />
+              </label>
+            </form>
 
             {!!selectedOperation.parameters.length && (
               <div className="params-section">
