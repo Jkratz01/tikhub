@@ -882,3 +882,52 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+
+/* Final layout safety overrides to prevent horizontal overflow */
+html,
+body,
+#root,
+.page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.layout,
+.main,
+.card,
+.playground-card,
+.endpoint-heading,
+.snippet-actions,
+.response-wrapper,
+.url-section,
+.filter-row,
+.filter-actions,
+.topbar,
+.top-controls {
+  min-width: 0;
+}
+
+.endpoint-item,
+.path,
+.summary,
+.url-box,
+.code-block,
+pre,
+h1,
+h2,
+h3,
+h4 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.segment {
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.segment button {
+  white-space: nowrap;
+}

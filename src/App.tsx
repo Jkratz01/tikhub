@@ -82,7 +82,7 @@ export default function App() {
   const [showTagFilters, setShowTagFilters] = useState(true);
   const [showHiddenTags, setShowHiddenTags] = useState(false);
   const [selectedOperationId, setSelectedOperationId] = useState<string>("");
-  const [language, setLanguage] = useState<SnippetLanguage>("shell");
+  const [language, setLanguage] = useState<SnippetLanguage>("python");
   const [globalApiKey, setGlobalApiKey] = useState("");
   const [perEndpointApiKey, setPerEndpointApiKey] = useState<Record<string, string>>({});
   const [baseUrl, setBaseUrl] = useState("https://api.tikhub.io");
