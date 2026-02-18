@@ -8,10 +8,22 @@ type ProxyPayload = {
   body?: string | null;
 };
 
+type ProxyRequest = {
+  method?: string;
+  body?: unknown;
+};
+
+type ProxyResponse = {
+  status: (code: number) => ProxyResponse;
+  send: (body: string) => void;
+  setHeader: (name: string, value: string) => void;
+};
+
 function normalizeHeaders(input?: Record<string, string>): Record<string, string> {
   if (!input) return {};
   const output: Record<string, string> = {};
   for (const [rawKey, rawValue] of Object.entries(input)) {
+    if (typeof rawValue !== "string") continue;
     const key = rawKey.toLowerCase();
     if (key === "host" || key === "origin" || key === "content-length") continue;
     output[rawKey] = rawValue;
@@ -19,37 +31,47 @@ function normalizeHeaders(input?: Record<string, string>): Record<string, string
   return output;
 }
 
-export default async function handler(request: Request): Promise<Response> {
-  if (request.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
+export default async function handler(req: ProxyRequest, res: ProxyResponse): Promise<void> {
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
   }
 
   let payload: ProxyPayload;
   try {
-    payload = (await request.json()) as ProxyPayload;
+    if (typeof req.body === "string") {
+      payload = JSON.parse(req.body) as ProxyPayload;
+    } else {
+      payload = (req.body ?? {}) as ProxyPayload;
+    }
   } catch {
-    return new Response("Invalid JSON payload", { status: 400 });
+    res.status(400).send("Invalid JSON payload");
+    return;
   }
 
   const urlText = payload.url?.trim();
   if (!urlText) {
-    return new Response("Missing target URL", { status: 400 });
+    res.status(400).send("Missing target URL");
+    return;
   }
 
   let targetUrl: URL;
   try {
     targetUrl = new URL(urlText);
   } catch {
-    return new Response("Invalid target URL", { status: 400 });
+    res.status(400).send("Invalid target URL");
+    return;
   }
 
   if (targetUrl.protocol !== "https:" || !ALLOWED_HOSTS.has(targetUrl.hostname)) {
-    return new Response("Target host is not allowed", { status: 403 });
+    res.status(403).send("Target host is not allowed");
+    return;
   }
 
   const method = (payload.method ?? "GET").toUpperCase();
   if (!ALLOWED_METHODS.has(method)) {
-    return new Response("Method is not allowed", { status: 405 });
+    res.status(405).send("Method is not allowed");
+    return;
   }
 
   const headers = normalizeHeaders(payload.headers);
@@ -61,18 +83,28 @@ export default async function handler(request: Request): Promise<Response> {
     init.body = payload.body;
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
   try {
-    const upstream = await fetch(targetUrl.toString(), init);
-    const body = await upstream.text();
-    const responseHeaders = new Headers();
-    const contentType = upstream.headers.get("content-type");
-    if (contentType) responseHeaders.set("content-type", contentType);
-    responseHeaders.set("cache-control", "no-store");
-    return new Response(body, {
-      status: upstream.status,
-      headers: responseHeaders
+    const upstream = await fetch(targetUrl.toString(), {
+      ...init,
+      signal: controller.signal
     });
-  } catch {
-    return new Response("Upstream request failed", { status: 502 });
+    const body = await upstream.text();
+    const contentType = upstream.headers.get("content-type");
+    if (contentType) {
+      res.setHeader("content-type", contentType);
+    }
+    res.setHeader("cache-control", "no-store");
+    res.status(upstream.status).send(body);
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      res.status(504).send("Upstream request timed out");
+      return;
+    }
+    res.status(502).send("Upstream request failed");
+  } finally {
+    clearTimeout(timeout);
   }
 }
